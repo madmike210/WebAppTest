@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8" />
+	<title>Oil Assets</title>
+  <link rel="shortcut icon" href="oilfavicon.ico" type="image/x-icon" />
+  <link rel="stylesheet" href="//ajax.googleapis.com/ajax/libs/jqueryui/1.11.2/themes/smoothness/jquery-ui.css" />
+  <link rel="stylesheet" href="css/site.css" />
+  <script src="https://maps.googleapis.com/maps/api/js"></script>
+  <script src="//ajax.googleapis.com/ajax/libs/jquery/1.11.1/jquery.min.js"></script>
+  <script src="//ajax.googleapis.com/ajax/libs/jqueryui/1.11.2/jquery-ui.min.js"></script>
+</head>
+<body>
+	<header><h1>Oil Assets</h1></header>
+  <div class="main ui-widget-content ui-corner-all">
+    <div id="graph_canvas_div" class="ui-widget-content ui-corner-all">
+  		<span id="close_graph_span"><span class="ui-icon ui-icon-closethick" onclick="closeGraph()"></span></span>
+      <br/>
+    	<div id="graph_canvas_info_div"></div>
+    	<canvas id="graph_canvas"></canvas>
+    </div>
+    <div id="map_canvas_container">
+  		<div id="map_canvas"></div>
+    </div>
+  </div>
+  <footer>
+    <span class="developer_name">Michael Madrigal</span><br/><a href="mailto:mmadrigal@swri.org" style="font-size:.8em">michaelmadrigal@gmail.com</a></footer>
+  </body>
+<script>
+	//Map Variables
+	var MAP_DEFAULT_LAT = 29.604;
+	var MAP_DEFAULT_LON = -98.53;
+	var MAP_DEFAULT_ZOOM = 12;
+	var map;
+	var mapCanvas;
+	var mapOptions;
+	var siteMarkers = new Array();
+	var siteInfo = new Array();
+	var endPointMarkers = new Array();
+	var endPointInfoToolTips = new Array();
+	var tankImage = "images/oil_tank.png"
+	var wellImage = "images/oil_well.png"
+	
+	//Graph Variables
+	var GRAPH_CANVAS_WIDTH = 900;
+	var GRAPH_CANVAS_HEIGHT = 600;
+	var canvas = document.getElementById('graph_canvas');
+	canvas.width=GRAPH_CANVAS_WIDTH;
+	canvas.height=GRAPH_CANVAS_HEIGHT;
+	var ctx = canvas.getContext('2d');
+  var AXIS_SIZE = 30;
+	var GRAPH_Y_PAD = 10;
+	var currGraphData = null;
+	var yGFactor = 1;
+	var xGFactor = 1;
+	
+	function drawGraph(dataArr, graphColor){
+		$('#graph_canvas_div').show();
+		$('graph_x_span').html("");
+		$('graph_y_span').html("");
+		
+		currGraphData=dataArr;
+		ctx.clearRect(0,0,canvas.width,canvas.height);
+		var minVal = 0;
+		var maxVal = 0;
+		
+		for(var i = 0; i < dataArr.length; i++){
+			if(i==0){
+				minVal = dataArr[i];
+				maxVal = dataArr[i];
+			}
+			if(maxVal < dataArr[i])
+				maxVal = dataArr[i];
+			if(minVal > dataArr[i])
+				minVal = dataArr[i];
+		}
+		
+		//draw axis
+		ctx.beginPath();
+		ctx.moveTo(AXIS_SIZE,0);
+		ctx.lineTo(AXIS_SIZE,canvas.height-AXIS_SIZE);
+		ctx.lineTo(canvas.width,canvas.height-AXIS_SIZE);
+
+		var prevX = null;
+		xGFactor = (canvas.width-AXIS_SIZE)/dataArr.length;
+		var yBottomCutOff = minVal-GRAPH_Y_PAD;
+		var yTopCutOff = maxVal+GRAPH_Y_PAD;
+		var yCutOffDiff = yTopCutOff-yBottomCutOff;
+		yGFactor = (canvas.height-AXIS_SIZE)/yCutOffDiff;
+		
+		for(var yAxisStep = parseInt(yBottomCutOff); yAxisStep < parseInt(yTopCutOff); yAxisStep++){
+			if(yAxisStep%5==0){
+				ctx.moveTo(AXIS_SIZE - 5, ((canvas.height)-yAxisStep*yGFactor + yBottomCutOff*yGFactor)-AXIS_SIZE);
+				ctx.lineTo(canvas.width, ((canvas.height)-yAxisStep*yGFactor + yBottomCutOff*yGFactor)-AXIS_SIZE);
+				if(yAxisStep%25==0)
+					ctx.fillText(yAxisStep, AXIS_SIZE - 25, ((canvas.height)-yAxisStep*yGFactor + yBottomCutOff*yGFactor)-AXIS_SIZE);
+			}
+		}
+		
+		//Draw Graph
+		for(var xAxisStep = 0; xAxisStep < dataArr.length; xAxisStep++){
+				if(xAxisStep>0 && xAxisStep%10==0){
+					ctx.moveTo(AXIS_SIZE+(xAxisStep*xGFactor), canvas.height-AXIS_SIZE+5);
+					ctx.lineTo(AXIS_SIZE+(xAxisStep*xGFactor), 0);
+					if( xAxisStep%50==0)
+						ctx.fillText(xAxisStep, AXIS_SIZE+(xAxisStep*xGFactor)-7, canvas.height-AXIS_SIZE+15);
+				}
+		}
+		ctx.strokeStyle = 'rgba(0, 0, 0, 0.1)';
+		ctx.stroke();
+		ctx.closePath();
+		
+		ctx.beginPath();
+		for(var x = 0; x < dataArr.length; x++){
+			if(x==0){
+				ctx.moveTo(AXIS_SIZE, ((canvas.height)-dataArr[x]*yGFactor + yBottomCutOff*yGFactor)-AXIS_SIZE);
+				prevX = AXIS_SIZE;
+			}
+			else{
+				ctx.lineTo(prevX+xGFactor, ((canvas.height)-dataArr[x]*yGFactor + yBottomCutOff*yGFactor)-AXIS_SIZE);
+				prevX=prevX+xGFactor;
+			}
+		}
+		ctx.strokeStyle = graphColor;
+		ctx.stroke();
+		ctx.closePath();
+	}
+	
+	function closeGraph(){
+		$('#graph_canvas_div').hide();
+	}
+	
+	function graphDataByEndPoint(siteName, asset, lat, long, type, label, endPointKey, typeIndex){
+		$.ajax({
+				url:"https://wellaware-frontend-dev-test.herokuapp.com/endpoint/"+endPointKey+"/data",
+				type:"GET",
+				dataType:"jsonp",
+				success:function(eData){
+					$('#graph_canvas_info_div').html(
+						"<b>Site:</b> " + siteName + "<br/>" +
+						"<b>Asset:</b> " + asset + "<br/>" +
+						"<b>Latitude:</b> " + lat + "<br/>" +
+						"<b>Longitude:</b> " + long + "<br/>" +
+						"<b>Type:</b> " + type + "<br/>" +
+						"<hr/>" +
+						"<b>" + label + "</b><br/>" +
+						"&nbsp;&nbsp;<b>Day: </b><span id='graph_x_span'></span><br/>" +
+						"&nbsp;&nbsp;<b>Production: </b><span id='graph_y_span'></span><br/>"
+					);
+					var graphColor = 'rgba(255, 102, 00, 1)';
+					if(typeIndex=='oil_production')
+						graphColor = 'rgba(122, 82, 48, 1)';
+					else if(typeIndex=='water_production')
+						graphColor = 'rgba(51, 102, 153, 1)';
+					drawGraph(eData[typeIndex], graphColor);
+				},
+				error:function(){alert("Error occurred while requesting asset data.");}
+			});
+	}
+	
+	function fetchEndpoint(siteName, siteIndex, siteKey, endPointIndex, endPointKey){
+		$.ajax({
+				url:"https://wellaware-frontend-dev-test.herokuapp.com/endpoint/"+endPointKey,
+				type:"GET",
+				dataType:"jsonp",
+				success:function(eInfo){
+					endPointMarkers[siteIndex][endPointIndex] =  new google.maps.Marker({
+								position: new google.maps.LatLng(eInfo.latitude, eInfo.longitude),
+								map: map,
+								title: eInfo.name,
+								siteIndex: siteIndex,
+								endPointIndex: endPointIndex,
+								endPointKey: endPointKey,
+								icon: (eInfo.type=="TANK"?tankImage:wellImage)
+						});
+					endPointMarkers[siteIndex][endPointIndex].setVisible(false);
+					endPointInfoToolTips[siteIndex][endPointIndex] = new google.maps.InfoWindow();
+					endPointInfoToolTips[siteIndex][endPointIndex].setContent(
+						'<div class="map-info-div">' +
+						'<b>Site:</b> ' + siteName + '<br/>' +
+						'<b>Asset:</b> ' + eInfo.name + '<br/>' +
+						'<b>Latitude:</b> ' + eInfo.latitude + '<br/>' +
+						'<b>Longitude:</b> ' + eInfo.longitude + '<br/>' +
+						'<b>Type:</b> ' + eInfo.type + '<br/>' + 
+						(typeof eInfo.today_gas_production !=='undefined'?
+							'<b>Today\'s Gas Production:</b> ' + 
+							(eInfo.today_gas_production).toFixed(2) + 
+							'<span class="ui-icon ui-icon-extlink" title="Graph Gas Production History" onclick="graphDataByEndPoint(\''+
+								siteName+'\',\''+eInfo.name+'\',\''+eInfo.latitude+'\',\''+eInfo.longitude+'\',\''+eInfo.type+'\',\'Gas Production\','+endPointKey+',\'gas_production\')"></span></span><br/>':'') +
+						(typeof eInfo.today_oil_production !=='undefined'?
+							'<b>Today\'s Oil Production:</b> ' + 
+							(eInfo.today_oil_production).toFixed(2) + 
+							'<span class="ui-icon ui-icon-extlink" title="Graph Oil Production History" onclick="graphDataByEndPoint(\''+
+								siteName+'\',\''+eInfo.name+'\',\''+eInfo.latitude+'\',\''+eInfo.longitude+'\',\''+eInfo.type+'\',\'Oil Production\','+endPointKey+',\'oil_production\')"></span></span><br/>':'') +
+						(typeof eInfo.today_water_production !=='undefined'?
+							'<b>Today\'s Water Production:</b> '+
+							(eInfo.today_water_production).toFixed(2)+
+							'<span class="ui-icon ui-icon-extlink" title="Graph Water Production History" onclick="graphDataByEndPoint(\''+
+								siteName+'\',\''+eInfo.name+'\',\''+eInfo.latitude+'\',\''+eInfo.longitude+'\',\''+eInfo.type+'\',\'Water Production\','+endPointKey+',\'water_production\')"></span></span><br/>':'') +
+						'</div>');
+					
+					endPointInfoToolTips[siteIndex][endPointIndex].setPosition(new google.maps.LatLng(eInfo.latitude, eInfo.longitude));
+					google.maps.event.addListener(endPointMarkers[siteIndex][endPointIndex], 'click', function(e) {
+							endPointInfoToolTips[this.siteIndex][this.endPointIndex].open(map);
+					});
+					},
+				error:function(e){
+						//handle failure.  Endpoint markers will not be created.
+					}
+			});
+	}
+	
+	function fetchSites(){
+		$.ajax({
+				url:"https://wellaware-frontend-dev-test.herokuapp.com/sites",
+				type:"GET",
+				dataType:"jsonp",
+				success:function(data){
+						sitesJsonData = data.sites;
+						for(var x = 0; x < sitesJsonData.length; x++){
+							siteMarkers[x] = new google.maps.Marker({
+									position: new google.maps.LatLng(sitesJsonData[x].latitude,sitesJsonData[x].longitude),
+									map: map,
+									title: sitesJsonData[x].name,
+									siteIndex: x,
+									siteKey:sitesJsonData[x].pk
+							});
+							
+							endPointMarkers[x] = new Array();
+							endPointInfoToolTips[x] = new Array();
+							for(var y = 0; y < sitesJsonData[x].endpoints.length; y++)
+								fetchEndpoint(sitesJsonData[x].name, x, sitesJsonData[x].pk, y, sitesJsonData[x].endpoints[y].pk);
+							google.maps.event.addListener(siteMarkers[x], 'click', function(e) {
+									map.setZoom(19);
+									map.setCenter(new google.maps.LatLng(sitesJsonData[this.siteIndex].latitude,sitesJsonData[this.siteIndex].longitude));
+									for(var z = 0; z < endPointMarkers[this.siteIndex].length; z++)
+										endPointMarkers[this.siteIndex][z].setVisible(true);
+									this.setVisible(false);
+							});
+						}
+					},
+				error:function(e){alert("Error occurred while requesting site data.");}
+			});
+	}
+
+	$(document).ready(function(){
+			mapCanvas = document.getElementById('map_canvas');
+			mapOptions = {
+				center: new google.maps.LatLng(MAP_DEFAULT_LAT, MAP_DEFAULT_LON),
+				zoom: MAP_DEFAULT_ZOOM,
+				mapTypeId: google.maps.MapTypeId.ROADMAP
+			}
+			map = new google.maps.Map(mapCanvas, mapOptions);
+			google.maps.event.addListener(map, 'zoom_changed', function() {
+				var zoomLevel = map.getZoom();
+				if(zoomLevel <= 16){
+					for(var x = 0; x < endPointMarkers.length; x++){
+						for(var y = 0; y < endPointMarkers[x].length; y++)
+							endPointMarkers[x][y].setVisible(false);
+					}
+					for(var x = 0; x < siteMarkers.length; x++)
+						siteMarkers[x].setVisible(true);
+				}
+				else if (zoomLevel > 16){
+					for(var x = 0; x < endPointMarkers.length; x++){
+						for(var y = 0; y < endPointMarkers[x].length; y++)
+							endPointMarkers[x][y].setVisible(true);
+					}
+					for(var x = 0; x < siteMarkers.length; x++)
+						siteMarkers[x].setVisible(false);
+				}
+			});
+			fetchSites();
+		});		
+	window.onload = function(){		
+		canvas.onmousemove = function(e){
+				var x = e.clientX;
+				var y = e.clientY;
+				
+				if(currGraphData!=null){
+					var bbox = canvas.getBoundingClientRect();
+					var xIndex = parseInt((x-bbox.left-AXIS_SIZE)/xGFactor);
+					if(xIndex>=0 && xIndex<currGraphData.length){
+						$('#graph_x_span').html(xIndex);
+						$('#graph_y_span').html((currGraphData[xIndex]).toFixed(2));
+					}
+				}
+			};
+	};
+
+</script>
+</html>
